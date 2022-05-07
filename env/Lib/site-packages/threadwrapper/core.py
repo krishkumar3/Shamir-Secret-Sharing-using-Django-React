@@ -1,0 +1,58 @@
+from omnitools import p, debug_info, args, def_template
+import threading
+import time
+import sys
+
+
+class ThreadWrapper:
+    def __init__(self, semaphore: threading.Semaphore) -> None:
+        self.total_thread_count = 0
+        self.threads = []
+        self.sema = semaphore
+        self.debug_time = False
+
+    def __run_job(self, job, result = None, key = None) -> None:
+        response = None
+        try:
+            self.sema.acquire()
+            start_time = time.time()
+            self.total_thread_count += 1
+            response = job()
+            if isinstance(result, list):
+                result.append(response)
+            elif isinstance(result, dict):
+                result[key] = response
+            duration = time.time()-start_time
+            if self.debug_time:
+                count = str(self.total_thread_count).ljust(20)
+                qualname = job.__qualname__.ljust(50)
+                timestamp = str(int(time.time() * 1000) / 1000).ljust(20)[6:]
+                s = "Thread {}{}{}{}s\n".format(count, qualname, timestamp, duration)
+                if duration >= 0.5:
+                    sys.stderr.write(s)
+                    sys.stderr.flush()
+                else:
+                    p(s)
+        except:
+            response = debug_info()[0]
+        finally:
+            self.sema.release()
+            return response
+
+    def add(self, *, job, result = None, key = None) -> bool:
+        if result is None:
+            result = {}
+        if key is None:
+            key = 0
+        thread = threading.Thread(target=self.__run_job, args=(job, result, key))
+        self.threads.append(thread)
+        thread.start()
+        return True
+
+    def wait(self) -> bool:
+        for thread in self.threads:
+            thread.join()
+        return True
+
+
+
