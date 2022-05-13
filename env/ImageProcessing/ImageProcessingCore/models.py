@@ -10,5 +10,5 @@ class Core(models.Model):
 
 class ImageOutputs(models.Model):
     un_id =  models.IntegerField(default= 0)
-    shares = models.ImageField(upload_to ='outputs/')
+    shares = models.ImageField(upload_to ='frontend/src/outputs/')
     cipher = models.TextField(default="")

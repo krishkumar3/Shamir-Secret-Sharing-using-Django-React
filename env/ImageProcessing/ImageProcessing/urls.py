@@ -15,7 +15,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path,include
-from ImageProcessingCore.views import homepage, ImageViewSet, getOutputShares,ImageOutputsViewSet
+from ImageProcessingCore.views import homepage, ImageViewSet, getOutputShares,ImageOutputsViewSet,imagePage,encryptWithKeys,cipherText
 from rest_framework import routers
 
 router = routers.DefaultRouter()
@@ -26,6 +26,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('', homepage, name="front"),
     path('api/', include(router.urls)),
-    path('post/<str:id>/', getOutputShares, name="Shares")
-
+    path('post/<str:id>/', getOutputShares, name="Shares"),
+    path('outputs/<str:file>/', imagePage, name="images"),
+    path('encrypt/<str:id>/', encryptWithKeys, name="encryption"),
+    path('cipher/<str:id>/', cipherText, name="cipherText"),
 ]

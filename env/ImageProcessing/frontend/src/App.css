@@ -121,3 +121,8 @@ box-shadow: 8px 6px 8px 0px #999, -6px -6px 5px 0px #999;
 max-width: 50vw;
 padding: 3rem;
 }
+
+.loading{
+  width: 20%;
+  align: "right";
+}

@@ -1,9 +1,9 @@
 from django.http import HttpResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
-from ImageProcessingCore.serializers import CoreSerializer,ImageOutputsSerializer
+from ImageProcessingCore.serializers import CoreSerializer, ImageOutputsSerializer
 from rest_framework import viewsets
-from ImageProcessingCore.models import Core,ImageOutputs
+from ImageProcessingCore.models import Core, ImageOutputs
 from os import path
 from math import sqrt
 import numpy as np
@@ -17,26 +17,102 @@ from Crypto.Cipher import AES
 from PyQt5 import QtCore, QtGui
 import json
 import base64
-from Crypto.Cipher import AES
 import os
 import sys
+from django.http import FileResponse
+
 Qt = QtCore.Qt
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 output_path = os.path.join(BASE_DIR, 'outputs')
 file_name = None
 identifier = None
+
+
 class ImageViewSet(viewsets.ModelViewSet):
     queryset = Core.objects.all()
     serializer_class = CoreSerializer
+
 
 class ImageOutputsViewSet(viewsets.ModelViewSet):
     queryset = ImageOutputs.objects.all()
     serializer_class = ImageOutputsSerializer
 
+
 def homepage(request):
     context = {}
     return render(request, "index.html", context)
+
+
+@csrf_exempt
+def imagePage(request, file):
+    path = os.path.join(BASE_DIR, 'frontend', 'src', 'outputs', file)
+    print("totalpath: " + path)
+    response = FileResponse(open(path, 'rb'))
+    return response
+
+
+@csrf_exempt
+def cipherText(request, id):
+    obj = ImageOutputs.objects.filter(un_id=id)
+    cipher_total = ''
+    open('file.txt', 'w').close()
+    file = open("cipher_output.txt", "a")
+    for i in obj:
+        cipher_total = cipher_total + i.cipher + "ENDOFLINE12345"
+        file.write(i.cipher)
+        file.write("ENDOFLINE12345")
+    file.close()
+    response = HttpResponse(cipher_total, content_type='application/text charset=utf-8')
+    response['Content-Disposition'] = 'attachment; filename="cipher_output.txt"'
+    return response
+
+
+@csrf_exempt
+def encryptWithKeys(request, id):
+    global identifier
+    identifier = id
+    body_unicode = request.body.decode('utf-8')
+    body = json.loads(body_unicode)
+    print("body", body)
+    mykey = body
+    print("Keys:", mykey)
+    output_imgs = ImageOutputs.objects.filter(un_id=identifier)
+    print(output_imgs)
+    output_list = []
+    for i in output_imgs:
+        iterator = 0
+        val = ImageOutputsSerializer(i)
+        print("share: ", i.shares)
+        strimg = base64.b64encode(i.shares.read())
+        x = Encrypter(strimg, mykey[iterator])
+        cipher_text = x.encrypt_image()
+        obj = ImageOutputs.objects.get(un_id=identifier, id=i.id)
+        obj.cipher=cipher_text
+        obj.save()
+        item = i.shares.name
+        item = item.replace(
+            'C:\\Users\\krish\\PycharmProjects\\Shamir-Secret-Sharing-using-Django-React\\env\\ImageProcessing\\frontend\\src\\outputs\\',
+            "")
+        output_list.append(str(item))
+        iterator = iterator + 1
+    iterator = iterator + 1
+    print(output_list)
+    obj = Core.objects.get(id=id)
+    obj_shares = ImageOutputs.objects.filter(un_id=id)
+    cipher_total = ''
+    for i in obj_shares:
+        cipher_total = cipher_total + i.cipher + "ENDOFLINE12345"
+        print(len(i.cipher))
+    obj.cipher=cipher_total
+    print("check:",mykey[iterator])
+    encoded_cipher_total = bytes(cipher_total, 'utf-8')
+    final_aes = Encrypter(encoded_cipher_total, mykey[iterator])
+    final_cipher_text = final_aes.encrypt_image()
+    obj.finalOutput = final_cipher_text
+    obj.save()
+    return HttpResponse("Encryption Successful")
+
 
 @csrf_exempt
 def getOutputShares(request, id):
@@ -49,9 +125,9 @@ def getOutputShares(request, id):
     path = objData.data['inputImage']
     paths = path.split("/")
     print(paths)
-    path = os.path.join(BASE_DIR, 'uploads',paths[2])
+    path = os.path.join(BASE_DIR, 'uploads', paths[2])
     file_name = paths[2]
-    print("totalpath: "+path)
+    print("totalpath: " + path)
     t1 = datetime.now()
     pic = Image.open(path)
     matrix = np.array(pic, np.int32)
@@ -59,32 +135,24 @@ def getOutputShares(request, id):
     print("Partition creation time:")
     print((datetime.now() - t1).seconds)
     context = dict()
-    context["n"]= n,
-    context["k"]= k,
-    context["path"]= path,
-    context["time"]= t1
+    context["n"] = n
+    context["k"] = k
+    context["path"] = path
+    context["time"] = t1
 
-    myKey = "14"
-    output_imgs = ImageOutputs.objects.filter(un_id = identifier)
+    output_imgs = ImageOutputs.objects.filter(un_id=identifier)
     print(output_imgs)
-    return_list = []
+    output_list = []
     for i in output_imgs:
         val = ImageOutputsSerializer(i)
-        # print("share: ",i.values())
-        # print("share: ",i['shares'])
         print("share: ", i.shares)
-        strimg = base64.b64encode(i.shares.read())
-        x = Encrypter(strimg, myKey)
-        cipher_text = x.encrypt_image()
-        obj = ImageOutputs.objects.filter(un_id = identifier,id = i.id)
-        obj.update(cipher =  cipher_text)
-        return_list.append(i.shares.name)
-    output_list =[]
-    print(return_list)
-    # for i in return_list:
-    #     output_list.append( i.replace("C:\\Users\\krish\\PycharmProjects\\env\\ImageProcessing\\outputs\\","/"))
-    # print(output_list)
-    return HttpResponse(json.dumps({"images":return_list}))
+        item = i.shares.name
+        item = item.replace(
+            'C:\\Users\\krish\\PycharmProjects\\Shamir-Secret-Sharing-using-Django-React\\env\\ImageProcessing\\frontend\\src\\outputs\\',
+            "")
+        output_list.append(str(item))
+    print(output_list)
+    return HttpResponse(json.dumps({"images": output_list}))
 
 
 class LagrangePolynomial:
@@ -164,13 +232,13 @@ def split_parts_list(n, k, prime, img, path_pic):
         pix_count = 0
         for pix in row:
             if len(pix) == 3:
-                r, g, b = pix[0], pix[1], pix[2] #RGB pixel
-            else:  #RGBA pixel
+                r, g, b = pix[0], pix[1], pix[2]  # RGB pixel
+            else:  # RGBA pixel
                 r, g, b = pix[1], pix[2], pix[3]
             p1, p2, p3 = Scheme(r, n, k, prime), Scheme(g, n, k, prime), Scheme(b, n, k, prime)
             sh1, sh2, sh3 = p1.construct_shares_image(), p2.construct_shares_image(), p3.construct_shares_image()
             for i in range(n):
-                new_rows[i][pix_count] = [sh1[i + 1], sh2[i + 1],sh3[i + 1]]
+                new_rows[i][pix_count] = [sh1[i + 1], sh2[i + 1], sh3[i + 1]]
             shrs[0][row_count][pix_count] = sh1
             shrs[1][row_count][pix_count] = sh2
             shrs[2][row_count][pix_count] = sh3
@@ -181,16 +249,16 @@ def split_parts_list(n, k, prime, img, path_pic):
             np_lists[el][row_count - 1] = new_rows[el]
             v += 1
     i = 0
-    name= name.replace("uploads","outputs")
+    name = name.replace("uploads", "frontend\src\outputs")
     for image in np_lists:
         new_img = Image.fromarray(image.astype('uint8'))
         image_p = name + "_share" + str(i)
         image_p += ".png"
         print(" image_p: " + image_p)
-        print("id:" , identifier)
+        print("id:", identifier)
         new_img.save(image_p)
         print("Creating Image Object")
-        output_obj = ImageOutputs(un_id = identifier,shares= image_p)
+        output_obj = ImageOutputs(un_id=identifier, shares=image_p)
         output_obj.save()
         print("Next Iteration")
         i += 1
@@ -302,7 +370,6 @@ def euclidean_dist(cnt, row, col, pix, sh_pix, rec_info, rec_pic, shares, k, pri
     return [R, G, B]
 
 
-
 class Scheme(object):
     def __init__(self, s, n, k, p):
         """
@@ -321,12 +388,14 @@ class Scheme(object):
     def construct_shares(self):
         self.coefs.append(self.s)
         values = np.polyval(self.coefs, [i for i in range(1, self.n + 1)]) % self.p
+        # print("polynomial:",values)
         shares = {i: values[i - 1] for i in range(1, self.n + 1)}
         return shares
 
     def construct_shares_image(self):
         self.coefs.append(self.s)
         values = np.polyval(self.coefs, [i for i in range(1, self.n + 1)]) % self.p
+        # print("polynomial:",values)
         shares = {}
         for i in range(1, self.n + 1):
             if int(values[i - 1]) != 256:
@@ -381,14 +450,17 @@ class Scheme(object):
         secret = lp.interpolate_img(0) % p
         return secret
 
+
 class Encrypter:
-    def __init__(self, text,key):
+    def __init__(self, text, key):
         self.text = text
-        self.key =  key
+        self.key = key
+
     def encrypt_image(self):
         aes = AESCipher(self.key)
         cipher = aes.encrypt(self.text)
         return cipher
+
 
 class Decrypter:
     def __init__(self, cipher):
@@ -428,4 +500,4 @@ class AESCipher(object):
 
     @staticmethod
     def _unpad(s):
-        return s[:-ord(s[len(s)-1:])]
+        return s[:-ord(s[len(s) - 1:])]
