@@ -1,9 +1,11 @@
 from django.http import HttpResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
-from ImageProcessingCore.serializers import CoreSerializer, ImageOutputsSerializer
+from ImageProcessingCore.serializers import CoreSerializer, ImageOutputsSerializer, DecryptionSerializer, \
+    CustomUserSerializer, \
+    UserImageListSerializer
 from rest_framework import viewsets
-from ImageProcessingCore.models import Core, ImageOutputs
+from ImageProcessingCore.models import Core, ImageOutputs, Decryption, CustomUser, UserImageList
 from os import path
 from math import sqrt
 import numpy as np
@@ -11,22 +13,26 @@ from random import randint
 from datetime import datetime
 from pathlib import Path
 import hashlib
+import jwt
 from PIL import Image
 from Crypto import Random
 from Crypto.Cipher import AES
-from PyQt5 import QtCore, QtGui
 import json
 import base64
 import os
 import sys
 from django.http import FileResponse
-
-Qt = QtCore.Qt
+import secrets
+import string
+import ast
+from django.core.mail import send_mail
+import zlib
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 output_path = os.path.join(BASE_DIR, 'outputs')
 file_name = None
 identifier = None
+sharesRGB = []
 
 
 class ImageViewSet(viewsets.ModelViewSet):
@@ -34,14 +40,88 @@ class ImageViewSet(viewsets.ModelViewSet):
     serializer_class = CoreSerializer
 
 
+class CustomUserViewSet(viewsets.ModelViewSet):
+    queryset = CustomUser.objects.all()
+    serializer_class = CustomUserSerializer
+
+
 class ImageOutputsViewSet(viewsets.ModelViewSet):
     queryset = ImageOutputs.objects.all()
     serializer_class = ImageOutputsSerializer
 
 
+class DecryptionViewSet(viewsets.ModelViewSet):
+    queryset = Decryption.objects.all()
+    serializer_class = DecryptionSerializer
+
+
+class UserImageListViewSet(viewsets.ModelViewSet):
+    queryset = UserImageList.objects.all()
+    serializer_class = UserImageListSerializer
+
+
 def homepage(request):
     context = {}
     return render(request, "index.html", context)
+
+def checker(id):
+    print("inside counter")
+    obj = UserImageList.objects.get(coreId = id)
+    count = obj.count + 1
+    if count == 3:
+        obj.delete()
+    else:
+        obj.count = count
+        obj.save()
+
+@csrf_exempt
+def sharedImages(request, email):
+    print("email:", email)
+    return_list = []
+    objects = UserImageList.objects.filter(useremail=email)
+    count = 0
+    for i in objects:
+        count = count + 1
+        return_list.append({"pk": i.coreId, "from": i.fromemail})
+    payload = {"count": count, "data": return_list}
+    return (HttpResponse(json.dumps(payload)))
+
+
+@csrf_exempt
+def autogenKeys(request, num):
+    passwords = []
+    for i in range(int(num) + 1):
+        alphabet = string.ascii_letters + string.digits
+        password = ''.join(secrets.choice(alphabet) for i in range(10))
+        passwords.append(password)
+    print(passwords)
+    return HttpResponse(json.dumps(passwords), content_type='text/plain')
+
+
+@csrf_exempt
+def sendEmail(request, email):
+    obj = CustomUser.objects.get(email=email)
+    send_mail(
+        'Forgot Password - Test Email',
+        'password:' + obj.password,
+        'humesworks1@gmail.com',
+        [obj.email],
+        fail_silently=False,
+    )
+    return HttpResponse(200)
+
+
+@csrf_exempt
+def signIn(request, email, password):
+    try:
+        obj = CustomUser.objects.get(email=email, password=password)
+        print(obj.username)
+        status = {"status": 200, "reason": ""}
+    except:
+        error = "Unable to find the User"
+        status = {"status": 400, "reason": error}
+    finally:
+        return HttpResponse(json.dumps(status), content_type='text/plain')
 
 
 @csrf_exempt
@@ -53,18 +133,196 @@ def imagePage(request, file):
 
 
 @csrf_exempt
+def decryptCipher(request, id):
+    # global sharesRGB
+    # shareRGB = open("SharesRGB.txt","r")
+    # rgbcont = shareRGB.read()
+    # sharesRGB = json.loads(rgbcont)
+    print(id)
+    obj = Decryption.objects.get(id=id)
+    key_file = obj.keys.read()
+    print(len(key_file))
+    decryption_data = jwt.decode(key_file, "secret", algorithms=["HS256"])
+    keys = ast.literal_eval(decryption_data["keys"])
+    print(keys, "Keys")
+    core_obj = Core.objects.get(id=decryption_data["id"])
+    sharesRGB = json.loads(core_obj.sharesRGB)
+    k = decryption_data["minShares"]
+    print("K:", k)
+    main_key = keys[-1]
+    print("MainKey", main_key)
+    cipherText_file = obj.cipher.read()
+    print(len(cipherText_file))
+    cipherText_file = cipherText_file[2:-1]
+    print(len(cipherText_file))
+    x = Decrypter(cipherText_file)
+    try:
+        image = x.decrypt_text(main_key)
+        # print(image)
+        aes = AESCipher(main_key)
+        file = open("cipher_1.txt", 'w+')
+        images = []
+        try:
+            print("Inside Try")
+            cipher_shares = aes.decrypt(cipherText_file)
+            print("step 1 over")
+            file.write(cipher_shares)
+            shares = cipher_shares.split("=")
+            for i in range(len(shares) - 1):
+                shares[i] = shares[i] + '='
+            for i in shares:
+                print("length:", len(i))
+                print("front:", i[:20])
+                print("back:", i[-10:])
+            iterator = 0
+            for i in range(len(shares)):
+
+                content = shares[i]
+                if (len(content) == 0 or len(content) == 1 or len(content) == 2):
+                    continue
+                print("front:", shares[i][:10])
+                print("last:", shares[i][-5:])
+                current_key = keys[iterator]
+                print(current_key)
+                try:
+                    x = Decrypter(content)
+                    image = x.decrypt_image(current_key, iterator)
+                except:
+                    content = content + "="
+                    x = Decrypter(content)
+                    image = x.decrypt_image(current_key, iterator)
+                finally:
+                    iterator = iterator + 1
+                    print(i, "success")
+
+            for i in range(int(k)):
+                image_path = "C:\\Users\\krish\\PycharmProjects\\Shamir-Secret-Sharing-using-Django-React\\env\\ImageProcessing\\" + "decryptedImage" + str(
+                    i) + ".png"
+                images.append(image_path)
+            print(images)
+            matrix = reconstruct_image(images, int(k), 257, sharesRGB)
+            new_img = Image.fromarray(matrix.astype('uint8'), 'RGB')
+            new_img.save(
+                "C:\\Users\\krish\\PycharmProjects\\Shamir-Secret-Sharing-using-Django-React\env\ImageProcessing\\frontend\\src\\outputs\\originalimage" + ".png")
+        finally:
+            print("tried")
+            print(len(sharesRGB))
+        status = 200
+    except:
+        status = 400
+    finally:
+        return HttpResponse(status)
+
+
+@csrf_exempt
+def decryptSharedImage(request, id,counter):
+    try:
+        print(id)
+        print(counter)
+        obj = Decryption.objects.get(id=id)
+        key_file = obj.keys.read()
+        print(len(key_file))
+        decryption_data = jwt.decode(key_file, "secret", algorithms=["HS256"])
+        keys = ast.literal_eval(decryption_data["keys"])
+        print(keys, "Keys")
+        core_obj = Core.objects.get(id=decryption_data["id"])
+        sharesRGB = json.loads(core_obj.sharesRGB)
+        k = decryption_data["minShares"]
+        print("K:", k)
+        main_key = keys[-1]
+        print("MainKey", main_key)
+        cipherText_file = core_obj.finalOutput
+        print(len(cipherText_file))
+        cipherText_file = cipherText_file[2:-1]
+        print(len(cipherText_file))
+        x = Decrypter(cipherText_file)
+        print("Start:", cipherText_file[:10])
+        print("end:", cipherText_file[-10:])
+        try:
+            image = x.decrypt_text(main_key)
+            # print(image)
+            aes = AESCipher(main_key)
+            file = open("cipher_1.txt", 'w+')
+            images = []
+            try:
+                print("Inside Try")
+                cipher_shares = aes.decrypt(cipherText_file)
+                print("step 1 over")
+                file.write(cipher_shares)
+                shares = cipher_shares.split("=")
+                for i in range(len(shares) - 1):
+                    shares[i] = shares[i] + '='
+                for i in shares:
+                    print("length:", len(i))
+                    print("front:", i[:20])
+                    print("back:", i[-10:])
+                iterator = 0
+                for i in range(len(shares)):
+                    content = shares[i]
+                    if (len(content) == 0 or len(content) == 1 or len(content) == 2):
+                        continue
+                    print("front:", shares[i][:10])
+                    print("last:", shares[i][-5:])
+                    current_key = keys[iterator]
+                    print(current_key)
+                    try:
+                        x = Decrypter(content)
+                        image = x.decrypt_image(current_key, iterator)
+                    except:
+                        content = content + "="
+                        x = Decrypter(content)
+                        image = x.decrypt_image(current_key, iterator)
+                    finally:
+                        iterator = iterator + 1
+                        print(i, "success")
+
+                for i in range(int(k)):
+                    image_path = "C:\\Users\\krish\\PycharmProjects\\Shamir-Secret-Sharing-using-Django-React\\env\\ImageProcessing\\" + "decryptedImage" + str(
+                        i) + ".png"
+                    images.append(image_path)
+                print(images)
+
+                matrix = reconstruct_image(images, int(k), 257, sharesRGB)
+                new_img = Image.fromarray(matrix.astype('uint8'), 'RGB')
+                new_img.save(
+                    "C:\\Users\\krish\\PycharmProjects\\Shamir-Secret-Sharing-using-Django-React\env\ImageProcessing\\frontend\\src\\outputs\\originalimage" + ".png")
+            finally:
+                print("tried")
+                print(len(sharesRGB))
+            status = 200
+        except:
+            print("inner except")
+            status = 400
+        finally:
+            print("inner finally")
+            return HttpResponse(status)
+    except:
+        status = 400
+        print("outer except")
+        checker(int(counter))
+    finally:
+        print("outer finally")
+        return HttpResponse(status)
+
+
+@csrf_exempt
 def cipherText(request, id):
-    obj = ImageOutputs.objects.filter(un_id=id)
-    cipher_total = ''
-    open('file.txt', 'w').close()
-    file = open("cipher_output.txt", "a")
-    for i in obj:
-        cipher_total = cipher_total + i.cipher + "ENDOFLINE12345"
-        file.write(i.cipher)
-        file.write("ENDOFLINE12345")
-    file.close()
+    obj = Core.objects.get(id=id)
+    cipher_total = obj.finalOutput
     response = HttpResponse(cipher_total, content_type='application/text charset=utf-8')
     response['Content-Disposition'] = 'attachment; filename="cipher_output.txt"'
+    return response
+
+
+def keysOutput(request, id):
+    obj = Core.objects.get(id=id)
+    keys = obj.keys
+    minShares = obj.k
+    shares = obj.n
+    data_dict = {"id": id, "keys": keys, "shares": shares, "minShares": minShares}
+    encoded_jwt = jwt.encode(data_dict, "secret", algorithm="HS256")
+    response = HttpResponse(encoded_jwt, content_type='application/text charset=utf-8')
+    response['Content-Disposition'] = 'attachment; filename="keys_output.txt"'
     return response
 
 
@@ -80,15 +338,18 @@ def encryptWithKeys(request, id):
     output_imgs = ImageOutputs.objects.filter(un_id=identifier)
     print(output_imgs)
     output_list = []
+    iterator = 0
+    ct = []
     for i in output_imgs:
-        iterator = 0
         val = ImageOutputsSerializer(i)
         print("share: ", i.shares)
         strimg = base64.b64encode(i.shares.read())
+        print("mykey", mykey[iterator])
         x = Encrypter(strimg, mykey[iterator])
         cipher_text = x.encrypt_image()
         obj = ImageOutputs.objects.get(un_id=identifier, id=i.id)
-        obj.cipher=cipher_text
+        obj.cipher = cipher_text
+        ct.append(cipher_text)
         obj.save()
         item = i.shares.name
         item = item.replace(
@@ -96,27 +357,36 @@ def encryptWithKeys(request, id):
             "")
         output_list.append(str(item))
         iterator = iterator + 1
-    iterator = iterator + 1
     print(output_list)
+    cts = b' '.join(ct)
+    print(len(cts))
     obj = Core.objects.get(id=id)
     obj_shares = ImageOutputs.objects.filter(un_id=id)
-    cipher_total = ''
+    cipher_total = ""
+
     for i in obj_shares:
-        cipher_total = cipher_total + i.cipher + "ENDOFLINE12345"
+        cipher_total = cipher_total + i.cipher
         print(len(i.cipher))
-    obj.cipher=cipher_total
-    print("check:",mykey[iterator])
-    encoded_cipher_total = bytes(cipher_total, 'utf-8')
+    cts = b' '.join(ct)
+    obj.cipher = cipher_total
+    print("check:", mykey[iterator])
+    file = open("cipher_1.txt", 'w+')
+    # encoded_cipher_total = bytes(cipher_total, 'utf-8')
+    encoded_cipher_total = cts
     final_aes = Encrypter(encoded_cipher_total, mykey[iterator])
     final_cipher_text = final_aes.encrypt_image()
     obj.finalOutput = final_cipher_text
+    obj.keys = json.dumps(mykey)
     obj.save()
+    file.write(str(final_cipher_text))
+
     return HttpResponse("Encryption Successful")
 
 
 @csrf_exempt
 def getOutputShares(request, id):
     global identifier
+    global sharesRGB
     identifier = id
     obj = Core.objects.get(id=id)
     objData = CoreSerializer(obj)
@@ -132,6 +402,10 @@ def getOutputShares(request, id):
     pic = Image.open(path)
     matrix = np.array(pic, np.int32)
     sharesRGB = split_parts_list(n, k, 257, matrix, path)
+    obj.sharesRGB = json.dumps(sharesRGB)
+    obj.save()
+    file = open("SharesRGB.txt", "w+")
+    file.write(json.dumps(sharesRGB))
     print("Partition creation time:")
     print((datetime.now() - t1).seconds)
     context = dict()
@@ -196,7 +470,8 @@ class LagrangePolynomial:
                         try:
                             if self.X[j][m] in temp or self.X[j][m] == self.X[i][k]:
                                 continue
-                            calc = (x - self.X[j][m]) / (self.X[i][k] - self.X[j][m])
+                            # print("checking value:",self.X[j][m],type(self.X[j][m]),"value of x:",x,type(x))
+                            calc = (x - int(self.X[j][m])) / (int(self.X[i][k]) - int(self.X[j][m]))
                             temp.append(self.X[j][m])
                             L.append(calc)
                             cont = True
@@ -434,7 +709,7 @@ class Scheme(object):
         for el in inputs:
             if el not in shares.values():
                 raise Exception("Inadequate share")
-
+        # print("working....")
         list_input = []
         vals = np.array(list(shares.values()))
         for i in range(len(inputs)):
@@ -466,12 +741,20 @@ class Decrypter:
     def __init__(self, cipher):
         self.cipher = cipher
 
-    def decrypt_image(self, k):
+    def decrypt_text(self, k):
         key = k
         cipher = self.cipher
         aes = AESCipher(key)
         base64_decoded = aes.decrypt(cipher)
-        fh = open("decryptedImage.png", "wb")
+        return (base64.b64decode(base64_decoded))
+
+    def decrypt_image(self, k, i=0):
+        key = k
+        cipher = self.cipher
+        aes = AESCipher(key)
+        base64_decoded = aes.decrypt(cipher)
+        file_name = "decryptedImage" + str(i) + ".png"
+        fh = open(file_name, "wb")
         fh.write(base64.b64decode(base64_decoded))
         fh.close()
         return (base64.b64decode(base64_decoded))

@@ -15,12 +15,21 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path,include
-from ImageProcessingCore.views import homepage, ImageViewSet, getOutputShares,ImageOutputsViewSet,imagePage,encryptWithKeys,cipherText
+from ImageProcessingCore.views import homepage, ImageViewSet, getOutputShares,ImageOutputsViewSet,imagePage, encryptWithKeys, cipherText,\
+    decryptCipher,DecryptionViewSet,autogenKeys,keysOutput , CustomUserViewSet,signIn, sendEmail ,UserImageListViewSet, \
+    sharedImages,decryptSharedImage
 from rest_framework import routers
+# from rest_framework_jwt.views import obtain_jwt_token
+
+
 
 router = routers.DefaultRouter()
 router.register(r'images', ImageViewSet)
 router.register(r'imageoutputs', ImageOutputsViewSet)
+router.register(r'cipher', DecryptionViewSet)
+router.register(r'users', CustomUserViewSet)
+router.register(r'emailshare', UserImageListViewSet)
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -30,4 +39,12 @@ urlpatterns = [
     path('outputs/<str:file>/', imagePage, name="images"),
     path('encrypt/<str:id>/', encryptWithKeys, name="encryption"),
     path('cipher/<str:id>/', cipherText, name="cipherText"),
+    path('decrypt/<str:id>/', decryptCipher, name="decryption"),
+    path('keygen/<str:num>/', autogenKeys, name="keygen"),
+    path('keyout/<str:id>/', keysOutput, name="keysOutput"),
+    path('signin/<str:email>/<str:password>/', signIn, name="signIn"),
+    path('sendEmail/<str:email>/', sendEmail, name="sendEmail"),
+    path('sharedimages/<str:email>/', sharedImages, name="sharedImages"),
+    path('decryptshared/<str:id>/<str:counter>/', decryptSharedImage, name="decryptSharedImage"),
+
 ]
